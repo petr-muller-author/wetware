@@ -335,6 +335,58 @@ mod tests {
     }
 
     #[test]
+    fn test_entity_picker_typing_narrows_matches() {
+        let entities = vec![make_entity("Sarah"), make_entity("Project"), make_entity("Sam")];
+        let mut app = App::new(vec![], entities, SortOrder::Ascending);
+        handle_key_event(&mut app, key_event(KeyCode::Char('/')));
+
+        handle_key_event(&mut app, key_event(KeyCode::Char('s')));
+
+        let Mode::EntityPicker { input, matches, .. } = &app.mode else {
+            panic!("expected the picker to stay open");
+        };
+        assert_eq!(input.value(), "s");
+        let matched: Vec<&str> = matches
+            .iter()
+            .map(|&i| app.entities[i].canonical_name.as_str())
+            .collect();
+        assert!(matched.contains(&"Sarah"), "{:?}", matched);
+        assert!(matched.contains(&"Sam"), "{:?}", matched);
+        assert!(!matched.contains(&"Project"), "{:?}", matched);
+    }
+
+    #[test]
+    fn test_entity_picker_backspace_widens_matches_again() {
+        let entities = vec![make_entity("Sarah"), make_entity("Project")];
+        let mut app = App::new(vec![], entities, SortOrder::Ascending);
+        handle_key_event(&mut app, key_event(KeyCode::Char('/')));
+        handle_key_event(&mut app, key_event(KeyCode::Char('s')));
+
+        handle_key_event(&mut app, key_event(KeyCode::Backspace));
+
+        let Mode::EntityPicker { input, matches, .. } = &app.mode else {
+            panic!("expected the picker to stay open");
+        };
+        assert_eq!(input.value(), "");
+        assert_eq!(matches.len(), 2, "an empty query offers every entity again");
+    }
+
+    #[test]
+    fn test_entity_picker_typing_resets_the_selection() {
+        let entities = vec![make_entity("Sarah"), make_entity("Sam")];
+        let mut app = App::new(vec![], entities, SortOrder::Ascending);
+        handle_key_event(&mut app, key_event(KeyCode::Char('/')));
+        handle_key_event(&mut app, key_event(KeyCode::Down));
+
+        handle_key_event(&mut app, key_event(KeyCode::Char('s')));
+
+        let Mode::EntityPicker { selected, .. } = &app.mode else {
+            panic!("expected the picker to stay open");
+        };
+        assert_eq!(*selected, 0, "a new query must not keep a stale highlight");
+    }
+
+    #[test]
     fn test_normal_mode_enter_opens_entity_detail() {
         let thoughts = vec![make_thought("Meeting with [Sarah]", 0)];
         let entities = vec![make_entity("Sarah")];

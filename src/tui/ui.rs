@@ -505,6 +505,35 @@ mod tests {
     }
 
     #[test]
+    fn test_styled_content_line_truncates_long_content() {
+        let line = styled_content_line("aaaaaaaaaaaaaaaaaaaaaaaaa", 10);
+
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.ends_with("..."), "{:?}", text);
+        assert!(text.chars().count() <= 10, "{:?}", text);
+    }
+
+    #[test]
+    fn test_styled_content_line_truncation_keeps_entity_styling() {
+        let line = styled_content_line("[Sarah] and a great deal of trailing text here", 12);
+
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.starts_with("Sarah"), "{:?}", text);
+        assert!(line.spans.iter().any(|s| s.style.fg.is_some()));
+    }
+
+    #[test]
+    fn test_styled_content_line_truncates_on_a_char_boundary() {
+        // Every char is multibyte, so a byte-index slice at the cut point would
+        // panic. Exercises each width around the boundary to catch off-by-ones.
+        for max_width in 4..14 {
+            let line = styled_content_line("ěščřžýáíéůúňť", max_width);
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(!text.is_empty(), "width {}", max_width);
+        }
+    }
+
+    #[test]
     fn test_styled_content_line_with_aliased_entity() {
         let line = styled_content_line("the [ML](machine-learning) course", 80);
         assert_eq!(line.spans.len(), 3);
