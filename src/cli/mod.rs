@@ -32,12 +32,15 @@ pub struct Cli {
 pub enum Commands {
     /// Add a new thought
     Add {
-        /// Thought content
-        content: String,
+        /// Thought content (omit to open the interactive composer)
+        content: Option<String>,
         /// Date for the thought: YYYY-MM-DD, today, yesterday, -3d, or a weekday (defaults to now)
         // Hyphen values so negative offsets like `--date -3d` parse as a value, not a flag.
         #[arg(long, allow_hyphen_values = true)]
         date: Option<String>,
+        /// Compose the thought interactively, with entity completion and date help
+        #[arg(short, long, conflicts_with = "content")]
+        interactive: bool,
     },
     /// List all thoughts
     Thoughts {

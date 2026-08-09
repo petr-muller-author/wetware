@@ -112,4 +112,25 @@ fn test_add_command_with_relative_date() {
     }
 }
 
+#[test]
+fn test_add_command_without_content_requires_a_terminal() {
+    let temp_db = setup_temp_db();
+    // Test processes get piped stdio, so the composer cannot start here. It must
+    // say so plainly rather than panicking or garbling the terminal.
+    let result = run_wet_command(&["add"], Some(&temp_db));
 
+    assert_ne!(result.status, 0, "Command should fail without a terminal");
+    assert!(
+        result.stderr.contains("terminal"),
+        "Should explain that a terminal is needed. Got: {}",
+        result.stderr
+    );
+}
+
+#[test]
+fn test_add_command_interactive_flag_conflicts_with_content() {
+    let temp_db = setup_temp_db();
+    let result = run_wet_command(&["add", "-i", "some content"], Some(&temp_db));
+
+    assert_ne!(result.status, 0, "-i and CONTENT are mutually exclusive");
+}
