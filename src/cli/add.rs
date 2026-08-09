@@ -30,17 +30,22 @@ fn add_directly(content: String, date: Option<String>, db_path: &Path) -> Result
     let mut conn = get_connection(db_path)?;
     run_migrations(&conn)?;
 
-    let (thought_id, entity_names) = thought_writer::create_thought(&mut conn, &content, date)?;
+    let created = thought_writer::create_thought(&mut conn, &content, date)?;
+
+    // Ambiguous mentions are reported, not linked; warn but do not fail.
+    for ambiguous in &created.ambiguous {
+        eprintln!("Warning: {}", ambiguous.describe());
+    }
 
     // Success message with entity count
-    if entity_names.is_empty() {
-        println!("Thought added successfully (ID: {})", thought_id);
+    if created.entities.is_empty() {
+        println!("Thought added successfully (ID: {})", created.id);
     } else {
         println!(
             "Thought added successfully (ID: {}, {} entity reference{})",
-            thought_id,
-            entity_names.len(),
-            if entity_names.len() == 1 { "" } else { "s" }
+            created.id,
+            created.entities.len(),
+            if created.entities.len() == 1 { "" } else { "s" }
         );
     }
 
@@ -63,13 +68,14 @@ fn compose_interactively(date: Option<String>, db_path: &Path) -> Result<(), Tho
     let mut terminal = ratatui::init();
     let result = app.run(&mut terminal);
     ratatui::restore();
-    result?;
 
+    // Report the count before propagating: those saves are already committed, and
+    // a terminal error must not leave the user unsure whether their work landed.
     match app.saved_count {
         0 => println!("No thoughts added."),
         1 => println!("1 thought added."),
         n => println!("{} thoughts added.", n),
     }
 
-    Ok(())
+    result
 }

@@ -6,8 +6,8 @@
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use tui_input::backend::crossterm::EventHandler;
 
-use super::ComposeApp;
 use super::state::{Field, Slot, Whisperer};
+use super::{ComposeApp, Status};
 use crate::tui::fuzzy;
 
 /// Handle a key event and update composer state.
@@ -76,8 +76,24 @@ fn handle_whisperer_key(app: &mut ComposeApp, key: KeyEvent) {
 
 /// Key handling while no popup is open.
 fn handle_field_key(app: &mut ComposeApp, key: KeyEvent) {
+    // Any key other than a second Esc disarms a pending discard.
+    if !matches!(key.code, KeyCode::Esc) {
+        app.pending_quit = false;
+    }
+
     match key.code {
-        KeyCode::Esc => app.should_quit = true,
+        // Leaving with an unsaved thought is the one destructive dismissal in the
+        // composer, so it takes a confirmation the others do not.
+        KeyCode::Esc => {
+            if app.content.value().trim().is_empty() || app.pending_quit {
+                app.should_quit = true;
+            } else {
+                app.pending_quit = true;
+                app.status = Some(Status::Error(
+                    "Unsaved thought. Press Esc again to discard it, or Enter to save.".to_string(),
+                ));
+            }
+        }
         KeyCode::Tab | KeyCode::BackTab => app.focus = app.focus.toggled(),
         KeyCode::Enter => app.save(),
         _ => {
@@ -155,7 +171,7 @@ fn recompute_whisperer(app: &mut ComposeApp, key: KeyEvent) {
         app.whisperer = Some(Whisperer {
             open_at: cursor.saturating_sub(1),
             slot,
-            matches: fuzzy::match_indices("", &app.candidate_labels()),
+            matches: matching_candidates(app, "", slot),
             selected: 0,
         });
         return;
@@ -185,11 +201,21 @@ fn recompute_whisperer(app: &mut ComposeApp, key: KeyEvent) {
         return;
     }
 
-    let matches = fuzzy::match_indices(&query, &app.candidate_labels());
+    let matches = matching_candidates(app, &query, slot);
     if let Some(whisperer) = app.whisperer.as_mut() {
         whisperer.matches = matches;
         whisperer.selected = 0;
     }
+}
+
+/// Candidate indices matching `query`, restricted to those valid in `slot`.
+fn matching_candidates(app: &ComposeApp, query: &str, slot: Slot) -> Vec<usize> {
+    let selectable = app.selectable_candidates(slot);
+    let labels: Vec<&str> = selectable.iter().map(|&i| app.candidates[i].label.as_str()).collect();
+    fuzzy::match_indices(query, &labels)
+        .into_iter()
+        .map(|matched| selectable[matched])
+        .collect()
 }
 
 /// The slot a just-typed character opens a popup for, if any.
@@ -745,12 +771,108 @@ mod tests {
     }
 
     #[test]
-    fn test_field_esc_quits() {
+    fn test_field_esc_quits_when_nothing_is_typed() {
         let mut app = seeded_app();
 
         handle_key_event(&mut app, key(KeyCode::Esc));
 
         assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_esc_with_unsaved_content_asks_before_discarding() {
+        let mut app = seeded_app();
+        type_text(&mut app, "a thought worth keeping");
+
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        assert!(!app.should_quit, "one Esc must not throw away typed text");
+        assert!(app.pending_quit);
+        assert!(matches!(app.status, Some(Status::Error(ref m)) if m.contains("Esc again")));
+        assert_eq!(app.content.value(), "a thought worth keeping");
+    }
+
+    #[test]
+    fn test_second_esc_discards_and_quits() {
+        let mut app = seeded_app();
+        type_text(&mut app, "a thought");
+
+        handle_key_event(&mut app, key(KeyCode::Esc));
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn test_typing_after_esc_disarms_the_discard() {
+        let mut app = seeded_app();
+        type_text(&mut app, "a thought");
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        type_text(&mut app, "!");
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        assert!(!app.should_quit, "the confirmation must be re-armed after an edit");
+        assert!(app.pending_quit);
+    }
+
+    #[test]
+    fn test_saving_clears_the_pending_discard() {
+        let mut app = seeded_app();
+        type_text(&mut app, "a thought");
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        handle_key_event(&mut app, key(KeyCode::Enter));
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        assert!(app.should_quit, "content is empty after a save, so Esc just leaves");
+        assert_eq!(app.saved_count, 1);
+    }
+
+    #[test]
+    fn test_whisperer_esc_does_not_arm_a_discard() {
+        let mut app = seeded_app();
+        type_text(&mut app, "met [ali");
+
+        handle_key_event(&mut app, key(KeyCode::Esc));
+
+        assert!(app.whisperer.is_none(), "the popup closes");
+        assert!(!app.pending_quit, "closing the popup is not a quit attempt");
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn test_target_slot_hides_entities_whose_name_has_parentheses() {
+        let mut app = seeded_app();
+        app.candidates.push(super::super::state::Candidate {
+            label: "Wetware (project)".to_string(),
+            canonical: "Wetware (project)".to_string(),
+            is_alias: false,
+            description: None,
+        });
+
+        // Display slot can express it: `[Wetware (project)]` parses fine.
+        type_text(&mut app, "[wetware");
+        assert!(offered(&app).contains(&"Wetware (project)".to_string()));
+
+        // Target slot cannot: `](Wetware (project))` misparses, so do not offer it.
+        app.content = tui_input::Input::default();
+        app.whisperer = None;
+        type_text(&mut app, "[my thing](wetware");
+        assert!(
+            !offered(&app).contains(&"Wetware (project)".to_string()),
+            "offered: {:?}",
+            offered(&app)
+        );
+    }
+
+    #[test]
+    fn test_target_slot_still_offers_ordinary_entities() {
+        let mut app = seeded_app();
+
+        type_text(&mut app, "[my boss](ali");
+
+        assert!(offered(&app).contains(&"Alice".to_string()));
     }
 
     #[test]

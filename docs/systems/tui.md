@@ -136,6 +136,7 @@ pub struct ComposeApp {
     pub status: Option<Status>,        // Saved { id, entities } | Error(String)
     pub saved_count: usize,
     pub should_quit: bool,
+    pub pending_quit: bool,            // an Esc on unsaved text, awaiting confirmation
     conn: Connection,
 }
 ```
@@ -153,6 +154,10 @@ must make newly created entities completable right away.
 `Tab`/`BackTab` switch focus, `Enter` saves, `Esc`/`Ctrl-C` quit, anything else goes to the focused
 input. With it open: arrows move the highlight, `Tab`/`Enter` accept, `Esc` dismisses while keeping the
 typed text, anything else edits the content and re-runs `recompute_whisperer`.
+
+`Esc` with no popup open quits only when the thought field is empty; with unsaved text it arms
+`pending_quit` and reports it in the status line, and any other key disarms it. Discarding written text
+is the composer's one destructive dismissal, so it is the one that asks first.
 
 Two bindings sit above both maps and fire from anywhere: `Ctrl-C` quits, and `Alt-Left`/`Alt-Right` call
 `ComposeApp::nudge_date(±1)`, shifting the date a day without moving focus — a one-day correction should
@@ -185,6 +190,10 @@ is what makes mapping a cursor index onto a row unambiguous. Breaks prefer the l
 Widths are display columns via `unicode-width`, not character counts, so wide glyphs cannot overflow
 and be clipped. Rendering and cursor placement both consume one `Wrapped`, so they cannot disagree.
 
+`compose/mod.rs`'s `selectable_candidates(slot)` filters what the whisperer may offer: in the target
+slot it drops entities whose canonical name contains a paren, since `ENTITY_PATTERN`'s target group
+cannot span one and accepting such a candidate would silently misparse into a new entity.
+
 `compose/ui.rs` — a vertical layout of date field, content field, preview, status, and a two-line
 syntax help footer. The date field re-parses on every frame and shows the resolved date or the accepted
 forms in red; when the input is already an absolute `YYYY-MM-DD` — which it always is after a nudge —
@@ -192,7 +201,9 @@ it shows only the weekday rather than echoing the date back. The content and pre
 their text**, capped at `CONTENT_MAX_ROWS` / `PREVIEW_MAX_ROWS` so the footer is never pushed off
 screen; past the content cap the field scrolls to keep the cursor's row in view. The preview wraps via
 `Paragraph::wrap` and therefore calls `styled_content_line` with an effectively unlimited width — it
-must not truncate, since wrapping is what shows the rest. The preview runs the raw content through `ui::styled_content_line` and appends a
+must not truncate, since wrapping is what shows the rest. The `+new:` marker gets its own reserved row
+below the text rather than trailing it: appended inline it was the first thing wrapping dropped, so it
+vanished on exactly the long thoughts where a typo is most likely. The preview runs the raw content through `ui::styled_content_line` and appends a
 `+new:` list of mentions missing from `known_lower`. The whisperer popup tracks the cursor's column but
 hangs below the preview, so the preview stays readable while completing.
 

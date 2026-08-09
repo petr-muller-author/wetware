@@ -23,7 +23,10 @@ const WHISPERER_MAX_ROWS: usize = 8;
 /// Most rows the content field grows to before it starts scrolling.
 const CONTENT_MAX_ROWS: usize = 6;
 
-/// Most rows the preview grows to before it stops showing more.
+/// Most rows the preview's resolved text grows to before it stops showing more.
+///
+/// The `+new:` marker gets its own reserved row on top of this, so it can never
+/// be the thing wrapping drops.
 const PREVIEW_MAX_ROWS: usize = 4;
 
 /// Render the whole composer frame.
@@ -59,26 +62,21 @@ pub fn render(app: &ComposeApp, frame: &mut Frame) {
     place_cursor(app, frame, chunks[0], chunks[1], &wrapped, content_scroll);
 }
 
-/// How many rows the preview needs, capped.
+/// How many rows the preview needs: its resolved text, capped, plus a reserved
+/// row for the `+new:` marker when there is one.
 fn preview_row_count(app: &ComposeApp, width: usize) -> usize {
     let content = app.content.value();
+    let marker_rows = usize::from(!app.new_entity_mentions().is_empty());
     if content.trim().is_empty() {
-        return 1;
+        return 1 + marker_rows;
     }
-    // The preview renders resolved display text plus any `+new:` marker, so
-    // measure that rather than the raw markup.
+    // Measure the resolved display text, not the raw markup.
     let rendered: String = styled_content_line(content, usize::MAX)
         .spans
         .iter()
         .map(|s| s.content.as_ref())
         .collect();
-    let marker = app.new_entity_mentions();
-    let measured = if marker.is_empty() {
-        rendered
-    } else {
-        format!("{}   +new: {}", rendered, marker.join(", "))
-    };
-    wrap::wrap(&measured, 0, width).rows.len().clamp(1, PREVIEW_MAX_ROWS)
+    wrap::wrap(&rendered, 0, width).rows.len().clamp(1, PREVIEW_MAX_ROWS) + marker_rows
 }
 
 /// Style for the border of a field, highlighted when focused.
@@ -163,22 +161,34 @@ fn render_preview(app: &ComposeApp, frame: &mut Frame, area: Rect) {
         ))
     } else {
         // Never truncate — the paragraph wraps instead, matching the content field.
-        let mut spans = styled_content_line(content, usize::MAX).spans;
-        let new_mentions = app.new_entity_mentions();
-        if !new_mentions.is_empty() {
-            spans.push(Span::styled(
-                format!("   +new: {}", new_mentions.join(", ")),
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
-            ));
-        }
-        Line::from(spans)
+        Line::from(styled_content_line(content, usize::MAX).spans)
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title("Preview");
-    frame.render_widget(Paragraph::new(line).block(block).wrap(Wrap { trim: false }), area);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // The marker gets its own row at the bottom rather than trailing the text.
+    // Appended inline it was the first thing wrapping dropped, so it vanished
+    // exactly on the long thoughts where a typo is most likely.
+    let new_mentions = app.new_entity_mentions();
+    let marker_rows = u16::from(!new_mentions.is_empty());
+    let [text_area, marker_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(marker_rows)]).areas(inner);
+
+    frame.render_widget(Paragraph::new(line).wrap(Wrap { trim: false }), text_area);
+
+    if marker_rows > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                format!("+new: {}", new_mentions.join(", ")),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::DIM),
+            ))),
+            marker_area,
+        );
+    }
 }
 
 /// Render the running session status: saves so far and the last outcome.
@@ -464,6 +474,32 @@ mod tests {
 
         assert!(out.contains("+new: Carol"), "{}", out);
         assert!(!out.contains("+new: Alice"), "{}", out);
+    }
+
+    #[test]
+    fn test_render_preview_keeps_the_new_marker_on_long_thoughts() {
+        let mut app = seeded_app();
+        app.content = tui_input::Input::new(format!("{} met [Carol]", "some longer words here ".repeat(6)));
+
+        let out = render_to_string(&app, 40, 30);
+
+        // Appended inline, the marker was the first thing wrapping dropped.
+        assert!(out.contains("+new: Carol"), "{}", out);
+    }
+
+    #[test]
+    fn test_render_preview_marker_sits_on_its_own_row() {
+        let mut app = seeded_app();
+        app.content = tui_input::Input::new("met [Carol]".to_string());
+
+        let out = render_to_string(&app, 60, 24);
+
+        let marker_row = out.lines().find(|l| l.contains("+new:")).expect("marker row");
+        assert!(
+            !marker_row.contains("met Carol"),
+            "marker must not share a row with the text: {:?}",
+            marker_row
+        );
     }
 
     #[test]

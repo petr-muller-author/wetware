@@ -32,7 +32,10 @@ flags mentions which would create a brand-new entity.
 5. Each keystroke goes to `compose::input::handle_key_event`, which picks one of two key maps depending
    on whether the whisperer popup is open.
 6. **Whisperer closed**: `Tab`/`Shift-Tab` switches focus between the date and content fields, `Enter`
-   saves, `Esc` and `Ctrl-C` quit, everything else goes to the focused `tui_input::Input`.
+   saves, `Ctrl-C` quits, everything else goes to the focused `tui_input::Input`. `Esc` quits too, but
+   only straight away when the thought field is empty: with unsaved text it arms a confirmation
+   (`pending_quit`) and says so in the status line, and any edit disarms it again. Discarding written
+   text is the one destructive dismissal in the composer, so it is the one that asks.
    `Alt-Left`/`Alt-Right` shift the date a day earlier or later from wherever the focus is, so a
    one-day correction never costs a trip to the date field and back; the field is rewritten as an
    absolute `YYYY-MM-DD` so repeated presses compose.
@@ -52,13 +55,20 @@ flags mentions which would create a brand-new entity.
    A space is appended so typing continues without reaching for one; it is skipped when the following
    text already begins with whitespace or with punctuation that should hug the reference
    (`[Alice].`, `[Alice]'s`). `ComposeApp::save` trims, so that convenience space never reaches storage.
+
+   Entities whose canonical name contains a parenthesis are not offered in the target slot at all:
+   `ENTITY_PATTERN`'s target group cannot span a nested paren, so `[my thing](Wetware (project))` would
+   degrade to the traditional form and silently create an entity named after the display text. They stay
+   reachable through the display slot, which tolerates parens.
 10. The popup closes on its own when the reference is finished or abandoned: the slot's own closing
     character in the query (`]` for the display slot, `)` for the target slot), the cursor moving back to
     or past the opening bracket, or that bracket being deleted.
 11. With no matches, the popup says so rather than blocking: `Enter` falls through to a save, so a
     brand-new entity name can be typed freely.
 12. Every frame re-renders the preview from the raw content, resolving markup to display text and
-    appending a `+new:` marker listing mentions absent from `known_lower`. Both the content field and
+    showing a `+new:` marker for mentions absent from `known_lower`. The marker occupies its own
+    reserved row rather than trailing the text, so wrapping can never drop it — appended inline it
+    disappeared exactly on the long thoughts where a typo is most likely. Both the content field and
     the preview word-wrap over as many rows as they need (`tui/compose/wrap.rs`), growing up to a cap
     and then scrolling to keep the cursor's row visible — text past the right edge is wrapped, never
     hidden.
@@ -67,8 +77,10 @@ flags mentions which would create a brand-new entity.
 14. On success the content field is cleared, the date field is kept, the save counter increments, and
     the candidates are reloaded so entities the save just created are immediately completable. The
     composer stays open.
-15. `Esc` sets `should_quit`, the loop ends, `cli/add.rs` calls `ratatui::restore()` and prints how many
-    thoughts were added.
+15. `Esc` (confirmed, if there was unsaved text) sets `should_quit`, the loop ends, and `cli/add.rs`
+    calls `ratatui::restore()` and prints how many thoughts were added. The count is printed *before*
+    any `run` error is propagated: those saves are already committed, and a terminal failure must not
+    leave the user unsure whether their work landed.
 
 ## Data and state changes
 
@@ -92,9 +104,13 @@ composer is ready for the next thought. On exit, `wet` prints the session total 
   type. `Enter` refuses to save and repeats the message in the status line; the content is untouched.
 - **Empty or oversized content** — `Thought::new`'s validation error lands in the status line and the
   content is preserved so it can be corrected.
-- **Ambiguous alias** — as everywhere else, `entity_resolution` skips the link with a stderr warning
-  rather than failing the save (see [`entity-alias-resolution.md`](entity-alias-resolution.md)). Because
-  the composer owns the alternate screen, that warning is not visible until the composer exits.
+- **Ambiguous alias** — the mention is skipped rather than failing the save (see
+  [`entity-alias-resolution.md`](entity-alias-resolution.md)), and the composer reports it in its own
+  status line: `Saved thought #N, but 'sar' matches multiple entities (…)`. The composer calls
+  `entity_resolution::resolve_entity`, which *returns* the ambiguity, not `resolve_or_create_entity`,
+  which prints it. Printing would be wrong here: stderr and the alternate screen are the same tty, so
+  the warning lands mid-frame with no carriage return, and because ratatui redraws only diffs the smear
+  survives for the rest of the session.
 - **Storage failure mid-save** — the transaction rolls back, so no partially-linked thought survives;
   the error appears in the status line and the composer stays open.
 

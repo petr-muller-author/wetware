@@ -74,13 +74,22 @@ one entity, it prints a warning to stderr and returns `Ok(None)` — the mention
 any entity, no new entity created) without failing the caller's overall command. See
 [`../flows/entity-alias-resolution.md`](../flows/entity-alias-resolution.md).
 
-**`thought_writer.rs`** — `create_thought(conn, content, date) -> Result<(i64, Vec<String>), ThoughtError>`,
+`resolve_entity(conn, name) -> Result<Resolution, ThoughtError>` is the same logic without the printing:
+it returns `Resolution::Ambiguous(AmbiguousMention)` for the caller to render. `resolve_or_create_entity`
+is now a thin wrapper over it. **Anything that owns the terminal must use `resolve_entity`** — the
+composer holds the tty in raw mode on the alternate screen, and an `eprintln!` there lands mid-frame with
+no carriage return, which ratatui's diff-based redraw then leaves smeared for the rest of the session.
+`AmbiguousMention::describe()` gives both paths identical wording.
+
+**`thought_writer.rs`** — `create_thought(conn, content, date) -> Result<Created, ThoughtError>`,
 the other storage-touching function here. Builds and validates a `Thought` (`date` of `None` timestamps it
 with the current instant, `Some(date)` pins it to midnight UTC), then saves it and links each extracted
-mention via `entity_resolution::resolve_or_create_entity` — all inside one transaction, so a failure part
+mention via `entity_resolution::resolve_entity` — all inside one transaction, so a failure part
 way through leaves no orphan thought behind. Shared by `wet add` and the interactive composer, which is why
-both cannot drift apart on what "adding a thought" means. Returns the new ID and the unique entity names
-extracted from the content; a name skipped as an ambiguous alias is counted in that list but not linked.
+both cannot drift apart on what "adding a thought" means. Returns a `Created { id, entities, ambiguous }`: the new ID, the unique entity
+names extracted from the content, and any mentions left unlinked because their alias was ambiguous.
+Ambiguity is *returned* rather than printed so a caller that owns the terminal can render it itself —
+see `entity_resolution` below.
 
 **`date_parser.rs`** — `parse_date_from(input, today)` / `parse_date(input)`, the single definition of
 what a date may look like anywhere in the app. Accepts, case-insensitively and trimmed: `YYYY-MM-DD`;

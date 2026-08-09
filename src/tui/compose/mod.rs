@@ -25,7 +25,7 @@ use crate::services::{date_parser, entity_parser, thought_writer};
 use crate::storage::entities_repository::EntitiesRepository;
 use crate::storage::entity_aliases_repository::EntityAliasesRepository;
 
-use state::{Candidate, Field, Whisperer};
+use state::{Candidate, Field, Slot, Whisperer};
 
 /// Outcome of the last save attempt, shown in the composer's status line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +60,8 @@ pub struct ComposeApp {
     pub saved_count: usize,
     /// Set when the user asks to leave
     pub should_quit: bool,
+    /// An `Esc` on a non-empty thought is armed but not yet confirmed
+    pub pending_quit: bool,
     conn: Connection,
 }
 
@@ -78,6 +80,7 @@ impl ComposeApp {
             status: None,
             saved_count: 0,
             should_quit: false,
+            pending_quit: false,
             conn,
         };
         app.reload_candidates()?;
@@ -122,6 +125,23 @@ impl ComposeApp {
     /// The labels of all candidates, in order, for fuzzy matching.
     pub fn candidate_labels(&self) -> Vec<&str> {
         self.candidates.iter().map(|c| c.label.as_str()).collect()
+    }
+
+    /// Indices of the candidates that can legally be accepted in `slot`.
+    ///
+    /// A target is written as `](Name)`, and `entity_parser`'s target group cannot
+    /// span a nested paren, so an entity whose canonical name contains `(` or `)`
+    /// has no valid target form: accepting it would silently degrade the reference
+    /// to the traditional one and create an entity named after the display text.
+    /// Such entities are still reachable through the display slot, which tolerates
+    /// parens, so they are simply not offered here.
+    pub fn selectable_candidates(&self, slot: Slot) -> Vec<usize> {
+        (0..self.candidates.len())
+            .filter(|&i| match slot {
+                Slot::Display => true,
+                Slot::Target => !self.candidates[i].canonical.contains(['(', ')']),
+            })
+            .collect()
     }
 
     /// Resolve the date field to a calendar date.
@@ -186,13 +206,21 @@ impl ComposeApp {
         // Trimmed so the space appended after a completion never reaches storage.
         let content = self.content.value().trim().to_string();
         match thought_writer::create_thought(&mut self.conn, &content, date) {
-            Ok((id, entities)) => {
+            Ok(created) => {
                 self.content.reset();
                 self.whisperer = None;
+                self.pending_quit = false;
                 self.saved_count += 1;
-                self.status = Some(Status::Saved {
-                    id,
-                    entities: entities.len(),
+                // Ambiguous mentions are reported here rather than printed: this
+                // process owns the terminal, and stderr would smear the frame.
+                self.status = Some(match created.ambiguous.first() {
+                    Some(ambiguous) => {
+                        Status::Error(format!("Saved thought #{}, but {}", created.id, ambiguous.describe()))
+                    }
+                    None => Status::Saved {
+                        id: created.id,
+                        entities: created.entities.len(),
+                    },
                 });
                 // Entities created by this save should be completable right away.
                 if let Err(e) = self.reload_candidates() {
