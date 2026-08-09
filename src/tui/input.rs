@@ -2,11 +2,11 @@
 //!
 //! Maps keyboard events to state mutations based on the current interaction mode.
 
-use nucleo_matcher::{Matcher, pattern::Pattern};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use tui_input::backend::crossterm::EventHandler;
 
 use super::App;
+use super::fuzzy;
 use super::state::Mode;
 
 /// Handle a key event and update app state.
@@ -164,32 +164,8 @@ fn handle_entity_picker_mode(app: &mut App, key: KeyEvent) {
             input.handle_event(&ratatui::crossterm::event::Event::Key(key));
 
             // Recompute fuzzy matches
-            let query = input.value();
-            if query.is_empty() {
-                *matches = (0..app.entities.len()).collect();
-            } else {
-                let mut matcher = Matcher::new(nucleo_matcher::Config::DEFAULT);
-                let pattern = Pattern::new(
-                    query,
-                    nucleo_matcher::pattern::CaseMatching::Ignore,
-                    nucleo_matcher::pattern::Normalization::Smart,
-                    nucleo_matcher::pattern::AtomKind::Fuzzy,
-                );
-
-                let mut scored: Vec<(usize, u32)> = app
-                    .entities
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, entity)| {
-                        let mut buf = Vec::new();
-                        let haystack = nucleo_matcher::Utf32Str::new(&entity.canonical_name, &mut buf);
-                        pattern.score(haystack, &mut matcher).map(|score| (i, score))
-                    })
-                    .collect();
-
-                scored.sort_by(|a, b| b.1.cmp(&a.1));
-                *matches = scored.into_iter().map(|(i, _)| i).collect();
-            }
+            let names: Vec<&str> = app.entities.iter().map(|e| e.canonical_name.as_str()).collect();
+            *matches = fuzzy::match_indices(input.value(), &names);
             *selected = 0;
         }
     }
