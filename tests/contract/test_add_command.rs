@@ -80,8 +80,36 @@ fn test_add_command_with_invalid_date() {
 
     assert_ne!(result.status, 0, "Command should fail with invalid date");
     assert!(
-        result.stderr.contains("Invalid date format"),
+        result.stderr.contains("Invalid date"),
         "Should report invalid date error. Got: {}",
         result.stderr
     );
+    assert!(
+        result.stderr.contains("YYYY-MM-DD"),
+        "Should list the accepted forms. Got: {}",
+        result.stderr
+    );
 }
+
+#[test]
+fn test_add_command_with_relative_date() {
+    let temp_db = setup_temp_db();
+
+    for date in ["today", "yesterday", "-3d", "-2w", "mon"] {
+        let result = run_wet_command(&["add", "Relative dated thought", "--date", date], Some(&temp_db));
+
+        assert_eq!(
+            result.status, 0,
+            "--date {} should be accepted. Got: {}",
+            date, result.stderr
+        );
+        assert!(
+            result.stdout.contains("Thought added"),
+            "Should confirm thought was added for --date {}. Got: {}",
+            date,
+            result.stdout
+        );
+    }
+}
+
+

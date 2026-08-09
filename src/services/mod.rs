@@ -1,4 +1,5 @@
 pub mod color_mode;
+pub mod date_parser;
 pub mod description_formatter;
 pub mod entity_parser;
 pub mod entity_resolution;

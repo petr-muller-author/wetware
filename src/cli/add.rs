@@ -1,21 +1,23 @@
 /// Add command implementation
 use crate::errors::ThoughtError;
 use crate::models::thought::Thought;
-use crate::services::{entity_parser, entity_resolution};
+use crate::services::{date_parser, entity_parser, entity_resolution};
 use crate::storage::connection::get_connection;
 use crate::storage::entities_repository::EntitiesRepository;
 use crate::storage::migrations::run_migrations;
 use crate::storage::thoughts_repository::ThoughtsRepository;
-use chrono::NaiveDate;
 use std::path::Path;
 
 /// Execute the add command
+///
+/// # Arguments
+/// * `content` - Text of the thought, including any `[Entity]` mentions
+/// * `date` - Optional date string; see [`date_parser`] for the accepted forms
+/// * `db_path` - Path to the SQLite database file
 pub fn execute(content: String, date: Option<String>, db_path: &Path) -> Result<(), ThoughtError> {
     // Create and validate thought
     let thought = if let Some(ref date_str) = date {
-        let naive = NaiveDate::parse_from_str(date_str, "%Y-%m-%d").map_err(|_| {
-            ThoughtError::InvalidInput(format!("Invalid date format '{}'. Expected YYYY-MM-DD.", date_str))
-        })?;
+        let naive = date_parser::parse_date(date_str)?;
         let datetime = naive.and_hms_opt(0, 0, 0).unwrap().and_utc();
         Thought::new_with_date(content.clone(), datetime)?
     } else {
